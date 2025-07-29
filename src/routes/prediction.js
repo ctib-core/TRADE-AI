@@ -28,6 +28,167 @@ const trainingRequestSchema = Joi.object({
 const predictionEngines = new Map();
 
 /**
+ * GET /api/v1/prediction/test-train/:symbol
+ * Test model training and saving for a specific symbol
+ */
+router.get('/test-train/:symbol', async (req, res) => {
+    try {
+        const { symbol } = req.params;
+        
+        logger.info(`Testing model training for ${symbol}`);
+        
+        // Create a new engine instance
+        const engine = new CryptoPredictionEngine({ symbol });
+        
+        logger.info(`Engine created, starting training...`);
+        
+        // Train the model
+        try {
+            engine.initializeModels();
+            await engine.trainModels();
+            await engine.saveModels();
+            
+            // Store the engine in the global map
+            predictionEngines.set(symbol, engine);
+            logger.info(`✅ Model trained and saved for ${symbol}`);
+            
+            res.json({
+                status: 'success',
+                symbol,
+                isTrained: engine.isTrained,
+                hasLSTM: !!engine.models.lstm,
+                hasRandomForest: !!engine.models.randomForest,
+                config: engine.config,
+                lastTraining: engine.lastTraining,
+                message: 'Model trained and saved successfully'
+            });
+        } catch (trainError) {
+            logger.error(`❌ Model training failed for ${symbol}:`, trainError);
+            
+            res.json({
+                status: 'error',
+                symbol,
+                error: trainError.message,
+                isTrained: engine.isTrained
+            });
+        }
+    } catch (error) {
+        logger.error('Test train error:', error);
+        res.status(500).json({
+            error: 'Test failed',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/v1/prediction/test-load/:symbol
+ * Test model loading for a specific symbol
+ */
+router.get('/test-load/:symbol', async (req, res) => {
+    try {
+        const { symbol } = req.params;
+        
+        logger.info(`Testing model loading for ${symbol}`);
+        
+        // Create a new engine instance
+        const engine = new CryptoPredictionEngine({ symbol });
+        
+        logger.info(`Engine created, isTrained: ${engine.isTrained}`);
+        
+        // Try to load models
+        try {
+            await engine.loadModels();
+            logger.info(`✅ Model loading successful for ${symbol}`);
+            
+            // Store the engine in the global map
+            predictionEngines.set(symbol, engine);
+            logger.info(`✅ Engine stored in global map for ${symbol}`);
+            
+            res.json({
+                status: 'success',
+                symbol,
+                isTrained: engine.isTrained,
+                hasLSTM: !!engine.models.lstm,
+                hasRandomForest: !!engine.models.randomForest,
+                config: engine.config,
+                lastTraining: engine.lastTraining
+            });
+        } catch (loadError) {
+            logger.error(`❌ Model loading failed for ${symbol}:`, loadError);
+            
+            res.json({
+                status: 'error',
+                symbol,
+                error: loadError.message,
+                isTrained: engine.isTrained
+            });
+        }
+    } catch (error) {
+        logger.error('Test load error:', error);
+        res.status(500).json({
+            error: 'Test failed',
+            message: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/v1/prediction/models/list
+ * List all available models in the models directory
+ */
+router.get('/models/list', async (req, res) => {
+    try {
+        const fs = await import('fs');
+        const path = await import('path');
+        
+        const modelsDir = './models';
+        const models = [];
+        
+        if (fs.existsSync(modelsDir)) {
+            const modelDirs = fs.readdirSync(modelsDir);
+            
+            for (const modelDir of modelDirs) {
+                const modelPath = path.join(modelsDir, modelDir);
+                const stats = fs.statSync(modelPath);
+                
+                if (stats.isDirectory()) {
+                    const files = fs.readdirSync(modelPath);
+                    const hasMetadata = files.includes('metadata.json');
+                    const hasNeuralNetwork = files.includes('neural_network.json');
+                    const hasStatus = files.includes('model_status.json');
+                    
+                    models.push({
+                        symbol: modelDir,
+                        path: modelPath,
+                        files: files,
+                        hasMetadata,
+                        hasNeuralNetwork,
+                        hasStatus,
+                        isComplete: hasMetadata && hasNeuralNetwork && hasStatus,
+                        lastModified: stats.mtime
+                    });
+                }
+            }
+        }
+        
+        res.json({
+            status: 'success',
+            modelsDirectory: modelsDir,
+            exists: fs.existsSync(modelsDir),
+            models: models,
+            totalModels: models.length
+        });
+    } catch (error) {
+        logger.error('Error listing models:', error);
+        res.status(500).json({
+            error: 'Failed to list models',
+            message: error.message
+        });
+    }
+});
+
+/**
  * GET /api/v1/prediction/status
  * Get prediction engine status
  */
@@ -62,9 +223,7 @@ router.post('/train', validateRequest(trainingRequestSchema), async (req, res) =
     try {
         const { symbol, ...config } = req.body;
         
-        logger.model(`Starting training for ${symbol}`, config);
-        
-        // Create or get existing engine
+        // Get or create prediction engine
         let engine = predictionEngines.get(symbol);
         if (!engine) {
             engine = new CryptoPredictionEngine({ symbol, ...config });
@@ -74,16 +233,27 @@ router.post('/train', validateRequest(trainingRequestSchema), async (req, res) =
             Object.assign(engine.config, config);
         }
 
-        // Initialize models
-        engine.initializeModels();
-        
-        // Train models
-        await engine.trainModels();
-        
-        engine.lastTraining = new Date().toISOString();
-        
-        logger.model(`Training completed for ${symbol}`);
-        
+        // Try to load existing model first
+        if (!engine.isTrained) {
+            try {
+                await engine.loadModels(); // Try to load existing model
+                logger.info(`Model loaded from disk for ${symbol}`);
+            } catch (e) {
+                logger.info(`Could not load model for ${symbol}, training from scratch: ${e.message}`);
+                // If loading fails, train from scratch
+                engine.initializeModels();
+                await engine.trainModels();
+                await engine.saveModels();
+                engine.lastTraining = new Date().toISOString();
+            }
+        } else {
+            // Force retraining for training endpoint
+            engine.initializeModels();
+            await engine.trainModels();
+            await engine.saveModels();
+            engine.lastTraining = new Date().toISOString();
+        }
+
         res.json({
             status: 'success',
             message: `Model trained successfully for ${symbol}`,
@@ -108,31 +278,45 @@ router.post('/predict', validateRequest(predictionRequestSchema), async (req, re
     try {
         const { symbol, ...config } = req.body;
         
-        logger.prediction(`Making prediction for ${symbol}`, config);
+        logger.info(`Prediction request for ${symbol}`, { config });
         
-        // Get or create engine
+        // Get or create prediction engine
         let engine = predictionEngines.get(symbol);
         if (!engine) {
+            logger.info(`Creating new engine for ${symbol}`);
             engine = new CryptoPredictionEngine({ symbol, ...config });
             predictionEngines.set(symbol, engine);
-            
-            // Train if not already trained
-            if (!engine.isTrained) {
+        } else {
+            logger.info(`Using existing engine for ${symbol}`);
+            // Update config for existing engine
+            Object.assign(engine.config, config);
+        }
+
+        logger.info(`Engine isTrained: ${engine.isTrained}`);
+
+        // Try to load existing model first
+        if (!engine.isTrained) {
+            logger.info(`Attempting to load model from disk for ${symbol}`);
+            try {
+                await engine.loadModels(); // Try to load existing model
+                logger.info(`✅ Model loaded from disk for ${symbol}`);
+            } catch (e) {
+                logger.info(`❌ Could not load model for ${symbol}, training from scratch: ${e.message}`);
+                // If loading fails, train from scratch
                 engine.initializeModels();
                 await engine.trainModels();
+                await engine.saveModels();
                 engine.lastTraining = new Date().toISOString();
+                logger.info(`✅ Model trained and saved for ${symbol}`);
             }
+        } else {
+            logger.info(`✅ Engine already trained for ${symbol}`);
         }
 
         // Run prediction
+        logger.info(`Running prediction for ${symbol}`);
         const result = await engine.runPrediction();
-        
-        logger.prediction(`Prediction completed for ${symbol}`, {
-            currentPrice: result.currentPrice,
-            predictedPrice: result.prediction.ensemble,
-            signal: result.tradingSignal.signal,
-            confidence: result.prediction.confidence
-        });
+        logger.info(`✅ Prediction completed for ${symbol}`);
         
         res.json({
             status: 'success',
@@ -145,6 +329,17 @@ router.post('/predict', validateRequest(predictionRequestSchema), async (req, re
             message: error.message
         });
     }
+});
+
+/**
+ * GET /api/v1/prediction/job/:jobId - check job status/result
+ * @deprecated - This endpoint is no longer used since we removed job queuing
+ */
+router.get('/job/:jobId', async (req, res) => {
+    res.status(410).json({
+        error: 'Deprecated',
+        message: 'Job queuing has been removed. All requests now run synchronously.'
+    });
 });
 
 /**

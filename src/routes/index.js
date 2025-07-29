@@ -5,6 +5,8 @@ import dataRoutes from './data.js';
 import modelRoutes from './models.js';
 import symbolsRoutes from './symbols.js';
 import newsRoutes from './news.js';
+import chatRoutes from './chat.js';
+import advancedChatRoutes from './advancedChat.js';
 import { logger } from '../utils/logger.js';
 
 export const setupRoutes = (app) => {
@@ -33,7 +35,9 @@ export const setupRoutes = (app) => {
                 '/api/v1/trading': 'CFD trading signal endpoints with advanced models',
                 '/api/v1/data': 'Market data endpoints',
                 '/api/v1/models': 'Model management endpoints',
-                '/api/v1/news': 'News sentiment and fundamental analysis'
+                '/api/v1/news': 'News sentiment and fundamental analysis',
+                '/api/v1/chat': 'AI Chat for crypto predictions and market analysis',
+                '/api/v1/advanced-chat': 'Advanced AI Chat with LangGraph, conversation memory, and tool calling'
             },
             features: [
                 '15+ years of historical data analysis',
@@ -48,7 +52,10 @@ export const setupRoutes = (app) => {
                 'Limit orders and advanced order types',
                 'Production-ready model persistence',
                 'WebSocket real-time updates',
-                'News sentiment analysis from trusted sources'
+                'News sentiment analysis from trusted sources',
+                'Advanced LangGraph chatbot with conversation memory',
+                'Tool calling for market data, predictions, and analysis',
+                'Streaming responses for real-time interaction'
             ]
         });
     });
@@ -60,6 +67,8 @@ export const setupRoutes = (app) => {
     apiRouter.use('/data', dataRoutes);
     apiRouter.use('/models', modelRoutes);
     apiRouter.use('/news', newsRoutes);
+    apiRouter.use('/chat', chatRoutes);
+    apiRouter.use('/advanced-chat', advancedChatRoutes);
 
     // Mount API router
     app.use('/api/v1', apiRouter);
@@ -77,7 +86,9 @@ export const setupRoutes = (app) => {
                 '/api/v1/trading',
                 '/api/v1/data',
                 '/api/v1/models',
-                '/api/v1/news'
+                '/api/v1/news',
+                '/api/v1/chat',
+                '/api/v1/advanced-chat'
             ]
         });
     });

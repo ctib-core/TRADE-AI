@@ -7,6 +7,8 @@ import mlKmeansPkg from 'ml-kmeans';
 import { logger } from '../utils/logger.js';
 import polygonService from '../services/polygonService.js';
 import ModelTrainer from './modelTrainer.js';
+import marketDataBuffer from '../libs/marketDataBuffer.js';
+import fs from 'fs';
 
 const { RandomForestRegression } = mlRfPkg;
 const SVM = mlSvmPkg.default || mlSvmPkg.SVM || mlSvmPkg;
@@ -232,16 +234,29 @@ class CryptoPredictionEngine {
         try {
             logger.info(`Fetching market data for ${this.config.symbol}`);
             
-            const endDate = new Date().toISOString().split('T')[0];
-            // Fetch 10 years of daily data (3650 days) for robust training
-            const startDate = new Date(Date.now() - (3650 * 24 * 60 * 60 * 1000))
-                .toISOString().split('T')[0];
+            // const endDate = new Date().toISOString().split('T')[0];
+            // // Fetch 10 years of daily data (3650 days) for robust training
+            // const startDate = new Date(Date.now() - (3650 * 24 * 60 * 60 * 1000))
+            //     .toISOString().split('T')[0];
             
+            // const data = await polygonService.getMarketDataWithIndicators(
+            //     this.config.symbol,
+            //     'day',
+            //     3650 // 10 years of data
+            // );
+
+            const endDate = new Date().toISOString().split('T')[0];
+
+            // Fetch 2 years of daily data (730 days)
+            const startDate = new Date(Date.now() - (730 * 24 * 60 * 60 * 1000))
+                .toISOString().split('T')[0];
+
             const data = await polygonService.getMarketDataWithIndicators(
                 this.config.symbol,
                 'day',
-                3650 // 10 years of data
+                730 // 2 years of data
             );
+
 
             if (!data.results || data.results.length === 0) {
                 throw new Error('No market data available');
@@ -656,7 +671,10 @@ class CryptoPredictionEngine {
         const baseConfidence = Math.max(0, 1 - (stdDev / mean));
         const modelAgreement = this.calculateModelAgreement(values);
         
-        return (baseConfidence + modelAgreement) / 2;
+        const finalConfidence = (baseConfidence + modelAgreement) / 2;
+        
+        // Ensure confidence is between 0 and 1
+        return Math.max(0, Math.min(1, finalConfidence));
     }
 
     /**
@@ -675,6 +693,7 @@ class CryptoPredictionEngine {
 
     /**
      * Generate trading signals for CFD trading with enhanced analysis
+     * This method is now deprecated in favor of the new CFD approach in trading.js
      */
     generateTradingSignals(currentPrice, predictedPrice, confidence) {
         try {
@@ -767,13 +786,6 @@ class CryptoPredictionEngine {
             const predictionResult = await this.predict(latestFeatures);
             const currentPrice = latestData[latestData.length - 1].close;
             
-            // Generate trading signals
-            const tradingSignal = this.generateTradingSignals(
-                currentPrice,
-                predictionResult.ensemble,
-                predictionResult.confidence
-            );
-
             // Store prediction for self-learning
             this.storePrediction({
                 timestamp: new Date().toISOString(),
@@ -781,7 +793,7 @@ class CryptoPredictionEngine {
                 predictedPrice: predictionResult.ensemble,
                 actualPrice: null, // Will be updated later
                 confidence: predictionResult.confidence,
-                signal: tradingSignal.signal
+                signal: null // Signal will be determined by trading route
             });
 
             return {
@@ -789,7 +801,6 @@ class CryptoPredictionEngine {
                 timestamp: new Date().toISOString(),
                 currentPrice: currentPrice,
                 prediction: predictionResult,
-                tradingSignal: tradingSignal,
                 marketData: {
                     lastUpdate: latestData[latestData.length - 1].date,
                     dataPoints: latestData.length
@@ -926,15 +937,28 @@ class CryptoPredictionEngine {
                 fs.mkdirSync(modelPath, { recursive: true });
             }
             
-            // Save TensorFlow.js model as JSON
+            // Save TensorFlow.js model as JSON with weights
             if (this.models.lstm) {
-                const modelArtifacts = await this.models.lstm.save(tf.io.withSaveHandler(async (artifacts) => {
-                    const modelJson = JSON.stringify(artifacts, null, 2);
-                    const modelFilePath = pathModule.join(modelPath, 'neural_network.json');
-                    fs.writeFileSync(modelFilePath, modelJson);
-                    logger.info(`Neural Network model saved to: ${modelFilePath}`);
-                    return { modelArtifacts: artifacts };
+                // Use the proper TensorFlow.js save method that includes weights
+                const modelJson = await this.models.lstm.save(tf.io.withSaveHandler(async (artifacts) => {
+                    // Convert weight data to base64 for JSON storage
+                    const weightData = artifacts.weightData;
+                    const weightDataBase64 = tf.io.encodeWeights(weightData);
+                    
+                    return {
+                        modelTopology: artifacts.modelTopology,
+                        weightSpecs: artifacts.weightSpecs,
+                        weightData: weightDataBase64,
+                        format: artifacts.format,
+                        generatedBy: artifacts.generatedBy,
+                        convertedBy: artifacts.convertedBy
+                    };
                 }));
+                
+                // Save the model JSON
+                const modelFilePath = pathModule.join(modelPath, 'neural_network.json');
+                fs.writeFileSync(modelFilePath, JSON.stringify(modelJson, null, 2));
+                logger.info(`Neural Network model saved to: ${modelFilePath}`);
             }
             
             // Save metadata
@@ -993,6 +1017,8 @@ class CryptoPredictionEngine {
             const metadataPath = pathModule.join(modelPath, 'metadata.json');
             if (fs.existsSync(metadataPath)) {
                 const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+                
+                // Override config with saved values to ensure compatibility
                 this.config = { ...this.config, ...metadata.config };
                 this.scalers = metadata.scalers;
                 this.featureColumns = metadata.featureColumns;
@@ -1002,7 +1028,14 @@ class CryptoPredictionEngine {
                 this.performanceMetrics = metadata.performanceMetrics;
                 this.featureImportance = metadata.featureImportance;
                 this.evaluationMetrics = metadata.evaluationMetrics;
+                
                 logger.info('Model metadata loaded successfully');
+                logger.info(`Loaded config: lookbackPeriod=${this.config.lookbackPeriod}, featureColumns=${this.featureColumns}`);
+            }
+            
+            // Initialize only LSTM model (skip Random Forest for now since it can't be easily loaded)
+            if (this.config.models.includes('lstm')) {
+                this.initializeLSTM();
             }
             
             // Load TensorFlow.js model from JSON
@@ -1010,6 +1043,12 @@ class CryptoPredictionEngine {
             if (fs.existsSync(neuralNetworkPath)) {
                 const modelJson = fs.readFileSync(neuralNetworkPath, 'utf8');
                 const modelArtifacts = JSON.parse(modelJson);
+                
+                // Decode the weight data from base64
+                if (modelArtifacts.weightData) {
+                    const weightData = tf.io.decodeWeights(modelArtifacts.weightData);
+                    modelArtifacts.weightData = weightData;
+                }
                 
                 // Load model using fromMemory handler
                 this.models.lstm = await tf.loadLayersModel(tf.io.fromMemory(modelArtifacts));
@@ -1022,6 +1061,9 @@ class CryptoPredictionEngine {
                 const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
                 logger.info('Model status loaded:', status);
             }
+            
+            // Set isTrained to true since we successfully loaded the models
+            this.isTrained = true;
             
             logger.info('All models loaded successfully from JSON files');
         } catch (error) {

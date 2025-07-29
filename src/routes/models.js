@@ -27,7 +27,28 @@ const loadModelSchema = Joi.object({
 router.get('/', async (req, res) => {
     try {
         const modelsPath = process.env.MODEL_SAVE_PATH || './models';
-        
+        const models = [];
+        const fs = require('fs');
+        const path = require('path');
+
+        // Helper to recursively find metadata.json files
+        function findMetadataFiles(dir) {
+            let results = [];
+            const list = fs.readdirSync(dir);
+            list.forEach(file => {
+                const filePath = path.join(dir, file);
+                const stat = fs.statSync(filePath);
+                if (stat && stat.isDirectory()) {
+                    results = results.concat(findMetadataFiles(filePath));
+                } else if (file === 'metadata.json') {
+                    results.push(filePath);
+                } else if (file.endsWith('.json')) {
+                    results.push(filePath);
+                }
+            });
+            return results;
+        }
+
         if (!fs.existsSync(modelsPath)) {
             return res.json({
                 status: 'success',
@@ -36,28 +57,22 @@ router.get('/', async (req, res) => {
             });
         }
 
-        const models = [];
-        const files = fs.readdirSync(modelsPath);
-        
+        const files = findMetadataFiles(modelsPath);
         for (const file of files) {
-            if (file.endsWith('.json')) {
-                try {
-                    const modelPath = path.join(modelsPath, file);
-                    const stats = fs.statSync(modelPath);
-                    const modelData = JSON.parse(fs.readFileSync(modelPath, 'utf8'));
-                    
-                    models.push({
-                        name: file.replace('.json', ''),
-                        symbol: modelData.symbol || 'Unknown',
-                        version: modelData.version || '1.0.0',
-                        description: modelData.description || '',
-                        size: stats.size,
-                        lastModified: stats.mtime,
-                        config: modelData.config || {}
-                    });
-                } catch (error) {
-                    logger.warn(`Failed to read model file ${file}:`, error.message);
-                }
+            try {
+                const stats = fs.statSync(file);
+                const modelData = JSON.parse(fs.readFileSync(file, 'utf8'));
+                models.push({
+                    name: modelData.modelName || modelData.symbol || path.basename(file, '.json'),
+                    symbol: modelData.symbol || 'Unknown',
+                    version: modelData.version || (modelData.config && modelData.config.version) || '1.0.0',
+                    description: modelData.description || '',
+                    size: stats.size,
+                    lastModified: stats.mtime,
+                    config: modelData.config || {}
+                });
+            } catch (error) {
+                logger.warn(`Failed to read model file ${file}:`, error.message);
             }
         }
 

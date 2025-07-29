@@ -3,6 +3,204 @@
 ## Base URL
 `http://localhost:3001/api/v1`
 
+## 🎯 **Enhanced CFD Trading Features**
+
+### **Risk Ratios**
+- **1:3 Ratio**: For every 1 pip risked, aim for 3 pips profit
+- **1:5 Ratio**: For every 1 pip risked, aim for 5 pips profit  
+- **1:7 Ratio**: For every 1 pip risked, aim for 7 pips profit
+
+### **Account Balance-Based Ratio Selection**
+- **Small Accounts (< $100)**: Use 1:3 ratio
+- **Medium Accounts ($100-$500)**: Use 1:5 ratio  
+- **Large Accounts ($500-$2000)**: Use 1:7 ratio
+- **Very Large Accounts (> $2000)**: Use 1:5 ratio (conservative)
+
+### **Pip Calculations**
+Different assets have different pip values:
+- **X:BTCUSD**: $0.01 per pip
+- **X:ETHUSD**: $0.01 per pip
+- **Other crypto pairs**: $0.01 per pip (default)
+
+### **Lot Size Management**
+- **0.01 lot** = 1,000 units
+- **0.05 lot** = 5,000 units  
+- **0.1 lot** = 10,000 units
+- **0.5 lot** = 50,000 units
+- **1.0 lot** = 100,000 units
+
+### **Profit/Loss Calculation**
+```javascript
+// Profit = Take Profit Pips × Units × Pip Value
+const potentialProfit = takeProfitPips * units * pipValue;
+
+// Loss = Stop Loss Pips × Units × Pip Value
+const potentialLoss = stopLossPips * units * pipValue;
+```
+
+## WebSocket Connection
+
+### WebSocket URL
+`ws://localhost:3000` or `http://localhost:3000` (for socket.io clients)
+
+### Connection Example
+```javascript
+// Browser or Node.js with socket.io-client
+import { io } from "socket.io-client";
+
+const socket = io("http://localhost:3000");
+
+// Listen for connection
+socket.on("connect", () => {
+    console.log("Connected to WebSocket server");
+});
+
+// Listen for disconnection
+socket.on("disconnect", () => {
+    console.log("Disconnected from WebSocket server");
+});
+```
+
+### WebSocket Events
+
+#### Join Trading Room
+**Event:** `join-trading`
+**Data:** `{ symbol: "X:BTCUSD" }`
+**Response:** `joined-trading` event with confirmation
+
+```javascript
+// Join trading room for BTCUSD
+socket.emit("join-trading", { symbol: "X:BTCUSD" });
+
+// Listen for confirmation
+socket.on("joined-trading", (data) => {
+    console.log("Joined trading room:", data);
+    // Response: { symbol: "X:BTCUSD", message: "Joined trading room for X:BTCUSD" }
+});
+```
+
+#### Join Prediction Room
+**Event:** `join-prediction`
+**Data:** `{ symbol: "X:BTCUSD" }`
+**Response:** `joined-prediction` event with confirmation
+
+```javascript
+// Join prediction room for BTCUSD
+socket.emit("join-prediction", { symbol: "X:BTCUSD" });
+
+// Listen for confirmation
+socket.on("joined-prediction", (data) => {
+    console.log("Joined prediction room:", data);
+    // Response: { symbol: "X:BTCUSD", message: "Joined prediction room for X:BTCUSD" }
+});
+```
+
+#### Leave Room
+**Event:** `leave-room`
+**Data:** `{ room: "trading-X:BTCUSD" }`
+
+```javascript
+// Leave a specific room
+socket.emit("leave-room", { room: "trading-X:BTCUSD" });
+```
+
+#### Trading Signal Updates
+**Event:** `trading-signal`
+**Data:** Real-time trading signal information
+
+```javascript
+// Listen for trading signals
+socket.on("trading-signal", (data) => {
+    console.log("Received trading signal:", data);
+    // Data includes: symbol, timestamp, signal, entry, stopLoss, takeProfit, etc.
+});
+```
+
+#### Prediction Updates
+**Event:** `prediction-update`
+**Data:** Real-time prediction information
+
+```javascript
+// Listen for prediction updates
+socket.on("prediction-update", (data) => {
+    console.log("Received prediction update:", data);
+    // Data includes: symbol, timestamp, currentPrice, prediction, confidence, etc.
+});
+```
+
+#### Market Data Updates
+**Event:** `market-data-update`
+**Data:** Real-time market data information
+
+```javascript
+// Listen for market data updates
+socket.on("market-data-update", (data) => {
+    console.log("Received market data update:", data);
+    // Data includes: symbol, timestamp, price, volume, indicators, etc.
+});
+```
+
+### Complete WebSocket Example
+```javascript
+import { io } from "socket.io-client";
+
+const socket = io("http://localhost:3000");
+
+// Connection events
+socket.on("connect", () => {
+    console.log("Connected to WebSocket server");
+    
+    // Join rooms for BTCUSD
+    socket.emit("join-trading", { symbol: "X:BTCUSD" });
+    socket.emit("join-prediction", { symbol: "X:BTCUSD" });
+});
+
+socket.on("disconnect", () => {
+    console.log("Disconnected from WebSocket server");
+});
+
+// Room confirmations
+socket.on("joined-trading", (data) => {
+    console.log("Joined trading room:", data);
+});
+
+socket.on("joined-prediction", (data) => {
+    console.log("Joined prediction room:", data);
+});
+
+// Real-time updates
+socket.on("trading-signal", (data) => {
+    console.log("Trading signal received:", data);
+    // Handle trading signal
+});
+
+socket.on("prediction-update", (data) => {
+    console.log("Prediction update received:", data);
+    // Handle prediction update
+});
+
+socket.on("market-data-update", (data) => {
+    console.log("Market data update received:", data);
+    // Handle market data update
+});
+
+// Error handling
+socket.on("error", (error) => {
+    console.error("WebSocket error:", error);
+});
+```
+
+### WebSocket Rooms
+- **Trading Room:** `trading-{symbol}` (e.g., `trading-X:BTCUSD`)
+- **Prediction Room:** `prediction-{symbol}` (e.g., `prediction-X:BTCUSD`)
+
+### WebSocket Features
+- **Real-time Updates:** Receive live trading signals, predictions, and market data
+- **Room-based Broadcasting:** Join specific symbol rooms to receive targeted updates
+- **Automatic Reconnection:** Socket.io handles reconnection automatically
+- **Error Handling:** Built-in error handling and logging
+- **Scalable:** Supports multiple clients and symbols simultaneously
+
 ## Health & Status
 
 ### GET /health
@@ -163,15 +361,16 @@
 ## Trading Endpoints
 
 ### POST /trading/signal
-**Description:** Generate trading signal for CFD trading
+**Description:** Generate CFD trading signal with risk ratios and pip calculations
 **Request:**
 ```json
 {
   "symbol": "X:BTCUSD",
-  "accountBalance": 10000,
-  "riskPercentage": 2,
-  "maxLeverage": 10,
-  "takeProfitRatio": 1.5,
+  "accountBalance": 1000,
+  "lotSize": 0.01,           // Required: Lot size in standard lots
+  "riskPercentage": 2,        // Risk percentage of account
+  "riskRatio": "1:3",        // Risk:Reward ratio (1:3, 1:5, 1:7)
+  "maxLeverage": 10,         // Maximum leverage allowed
   "useAdvancedModel": true,
   "enableSelfLearning": true
 }
@@ -181,47 +380,56 @@
 {
   "status": "success",
   "symbol": "X:BTCUSD",
-  "timestamp": "2025-01-11T20:30:00.000Z",
+  "timestamp": "2025-07-28T12:03:33.141Z",
   "signal": {
     "signal": "BUY",
-    "entry": 45000,
-    "predictedPrice": 46500,
-    "stopLoss": 44100,
-    "takeProfit": 46350,
+    "entry": 45000.00,
+    "predictedPrice": 46500.00,
+    "stopLoss": 44800.00,
+    "takeProfit": 45600.00,
     "priceChangePercent": 3.33,
     "confidence": 0.75,
-    "riskRewardRatio": 1.5,
-    "leverage": 8,
+    "riskRewardRatio": 3.0,
+    "leverage": 7,
+    "pips": {
+      "stopLoss": 200,
+      "takeProfit": 600,
+      "riskReward": 3.0
+    },
+    "positionSize": {
+      "units": 1000,
+      "marginRequired": 6428.57,
+      "leverage": 7,
+      "riskAmount": 20,
+      "priceDifference": 200,
+      "pipsRisked": 200,
+      "riskPerPip": 10,
+      "lotSize": 0.01
+    },
+    "potentialProfit": 6000,
+    "potentialLoss": 2000,
+    "marginRequired": 6428.57,
+    "freeMargin": 3571.43,
     "analysis": {
       "signalStrength": 2.22,
       "confidenceScore": 0.75,
       "riskAssessment": "MEDIUM"
-    },
-    "positionSize": {
-      "units": 2.5,
-      "marginRequired": 1125,
-      "leverage": 8,
-      "riskAmount": 200,
-      "priceDifference": 900
-    },
-    "potentialProfit": 375,
-    "potentialLoss": 200,
-    "marginRequired": 1125,
-    "freeMargin": 8875
+    }
   },
   "prediction": {
-    "currentPrice": 45000,
-    "predictedPrice": 46500,
+    "currentPrice": 45000.00,
+    "predictedPrice": 46500.00,
     "confidence": 0.75,
     "individualPredictions": {
-      "lstm": [46000],
-      "randomForest": [47000]
+      "lstm": [46500.00],
+      "randomForest": [46450.00]
     }
   },
   "modelInfo": {
     "isTrained": true,
-    "lastTraining": "2025-01-11T20:30:00.000Z",
-    "predictionCount": 1,
+    "lastTraining": "2025-07-28T11:45:02.315Z",
+    "lastRetrain": "2025-07-28T11:45:02.316Z",
+    "predictionCount": 2,
     "performanceMetrics": {}
   },
   "analysis": {
@@ -279,8 +487,8 @@
 {
   "symbol": "X:BTCUSD",
   "entryPrice": 45000,
-  "stopLoss": 44100,
-  "accountBalance": 10000,
+  "stopLoss": 44800,
+  "accountBalance": 1000,
   "riskPercentage": 2,
   "leverage": 10
 }
@@ -291,19 +499,27 @@
   "status": "success",
   "symbol": "X:BTCUSD",
   "positionSize": {
-    "units": 2.5,
-    "marginRequired": 1125,
+    "units": 2.0,
+    "marginRequired": 9000,
     "leverage": 10,
-    "riskAmount": 200,
-    "priceDifference": 900
+    "riskAmount": 20,
+    "priceDifference": 200,
+    "riskPerUnit": 200,
+    "maxUnits": 0.1,
+    "marginRequired": 9000,
+    "freeMargin": 1000
   },
-  "riskAnalysis": {
-    "riskAmount": 200,
-    "riskPerUnit": 900,
-    "maxUnits": 2.5,
+  "riskCalculator": {
+    "accountBalance": 1000,
+    "riskPercentage": 2,
+    "riskAmount": 20,
+    "entryPrice": 45000,
+    "stopLoss": 44800,
+    "priceDifference": 200,
+    "maxUnits": 0.1,
     "leverageUsed": 10,
-    "marginRequired": 1125,
-    "freeMargin": 8875
+    "marginRequired": 9000,
+    "freeMargin": 1000
   }
 }
 ```

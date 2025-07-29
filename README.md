@@ -18,6 +18,17 @@ A sophisticated AI/ML crypto prediction server built with Node.js, TensorFlow.js
 - **Security**: Rate limiting, CORS, helmet security headers
 - **API Documentation**: Complete REST API with validation and comprehensive examples
 
+### 🎯 **Enhanced CFD Trading Features**
+
+- **Risk Ratios**: Configurable 1:3, 1:5, 1:7 risk:reward ratios
+- **Pip Calculations**: Proper pip-based calculations for different crypto assets
+- **Lot Size Management**: User-controlled lot sizes with standard lot conversions
+- **Dynamic Leverage**: Confidence-based leverage calculation
+- **Margin Requirements**: Accurate margin and free margin calculations
+- **Profit/Loss Projections**: Realistic CFD profit and loss calculations
+- **Risk Assessment**: LOW/MEDIUM/HIGH risk classification
+- **Account Balance Optimization**: Automatic risk ratio selection based on account size
+
 ## 🏗️ Architecture
 
 ```
@@ -176,19 +187,20 @@ GET /api/v1/docs
 }
 ```
 
-### Advanced Trading Endpoints
+### Trading Endpoints
 
-#### Generate Trading Signal with Advanced Model
+#### Generate CFD Trading Signal
 ```bash
 POST /api/v1/trading/signal
 Content-Type: application/json
 
 {
   "symbol": "X:BTCUSD",
-  "accountBalance": 10000,
-  "riskPercentage": 2,
-  "maxLeverage": 10,
-  "takeProfitRatio": 1.5,
+  "accountBalance": 1000,
+  "lotSize": 0.01,           // Required: Lot size in standard lots
+  "riskPercentage": 2,        // Risk percentage of account
+  "riskRatio": "1:3",        // Risk:Reward ratio (1:3, 1:5, 1:7)
+  "maxLeverage": 10,         // Maximum leverage allowed
   "useAdvancedModel": true,
   "enableSelfLearning": true
 }
@@ -199,59 +211,108 @@ Content-Type: application/json
 {
   "status": "success",
   "symbol": "X:BTCUSD",
-  "timestamp": "2024-01-15T10:30:00.000Z",
+  "timestamp": "2025-07-28T12:03:33.141Z",
   "signal": {
     "signal": "BUY",
-    "entry": 50000,
-    "predictedPrice": 52000,
-    "stopLoss": 49000,
-    "takeProfit": 51500,
-    "priceChangePercent": 4.0,
+    "entry": 45000.00,
+    "predictedPrice": 46500.00,
+    "stopLoss": 44800.00,
+    "takeProfit": 45600.00,
+    "priceChangePercent": 3.33,
     "confidence": 0.75,
-    "riskRewardRatio": 1.5,
+    "riskRewardRatio": 3.0,
     "leverage": 7,
-    "positionSize": {
-      "units": 2.0,
-      "marginRequired": 1428.57,
-      "leverage": 7,
-      "riskAmount": 200,
-      "priceDifference": 1000
+    "pips": {
+      "stopLoss": 200,
+      "takeProfit": 600,
+      "riskReward": 3.0
     },
-    "potentialProfit": 3000,
+    "positionSize": {
+      "units": 1000,
+      "marginRequired": 6428.57,
+      "leverage": 7,
+      "riskAmount": 20,
+      "priceDifference": 200,
+      "pipsRisked": 200,
+      "riskPerPip": 10,
+      "lotSize": 0.01
+    },
+    "potentialProfit": 6000,
     "potentialLoss": 2000,
-    "marginRequired": 1428.57,
-    "freeMargin": 8571.43,
+    "marginRequired": 6428.57,
+    "freeMargin": 3571.43,
     "analysis": {
-      "signalStrength": 2.67,
-      "riskAssessment": "MEDIUM",
-      "confidenceScore": 0.75
+      "signalStrength": 2.22,
+      "confidenceScore": 0.75,
+      "riskAssessment": "MEDIUM"
     }
   },
   "prediction": {
-    "currentPrice": 50000,
-    "predictedPrice": 52000,
+    "currentPrice": 45000.00,
+    "predictedPrice": 46500.00,
     "confidence": 0.75,
     "individualPredictions": {
-      "lstm": [52000],
-      "randomForest": [51800],
-      "svm": [52200]
+      "lstm": [46500.00],
+      "randomForest": [46450.00]
     }
   },
   "modelInfo": {
     "isTrained": true,
-    "lastTraining": "2024-01-15T09:00:00.000Z",
-    "lastRetrain": "2024-01-15T08:00:00.000Z",
-    "predictionCount": 150,
-    "performanceMetrics": {
-      "lstm": { "accuracy": 0.72 },
-      "randomForest": { "accuracy": 0.68 },
-      "svm": { "accuracy": 0.65 }
-    }
+    "lastTraining": "2025-07-28T11:45:02.315Z",
+    "lastRetrain": "2025-07-28T11:45:02.316Z",
+    "predictionCount": 2,
+    "performanceMetrics": {}
   },
   "analysis": {
-    "signalStrength": 2.67,
+    "signalStrength": 2.22,
     "riskAssessment": "MEDIUM",
     "confidenceScore": 0.75
+  }
+}
+```
+
+#### Calculate Position Size
+```bash
+POST /api/v1/trading/position-size
+Content-Type: application/json
+
+{
+  "symbol": "X:BTCUSD",
+  "entryPrice": 45000,
+  "stopLoss": 44800,
+  "accountBalance": 1000,
+  "riskPercentage": 2,
+  "leverage": 10
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "symbol": "X:BTCUSD",
+  "positionSize": {
+    "units": 2.0,
+    "marginRequired": 9000,
+    "leverage": 10,
+    "riskAmount": 20,
+    "priceDifference": 200,
+    "riskPerUnit": 200,
+    "maxUnits": 0.1,
+    "marginRequired": 9000,
+    "freeMargin": 1000
+  },
+  "riskCalculator": {
+    "accountBalance": 1000,
+    "riskPercentage": 2,
+    "riskAmount": 20,
+    "entryPrice": 45000,
+    "stopLoss": 44800,
+    "priceDifference": 200,
+    "maxUnits": 0.1,
+    "leverageUsed": 10,
+    "marginRequired": 9000,
+    "freeMargin": 1000
   }
 }
 ```
@@ -297,7 +358,7 @@ Content-Type: application/json
   },
   "modelInfo": {
     "isTrained": true,
-    "lastTraining": "2024-01-15T10:30:00.000Z",
+    "lastTraining": "2025-07-28T12:03:33.141Z",
     "modelType": "ensemble",
     "useAdvancedModel": true,
     "enableSelfLearning": true
@@ -321,22 +382,18 @@ GET /api/v1/trading/model-status/X:BTCUSD
   "status": "success",
   "symbol": "X:BTCUSD",
   "isTrained": true,
-  "lastTraining": "2024-01-15T10:30:00.000Z",
-  "lastRetrain": "2024-01-15T08:00:00.000Z",
+  "lastTraining": "2025-07-28T12:03:33.141Z",
+  "lastRetrain": "2025-07-28T11:45:02.316Z",
   "config": {
     "modelType": "ensemble",
     "useAdvancedModel": true,
     "enableSelfLearning": true,
-    "models": ["lstm", "randomForest", "svm"]
+    "models": ["lstm", "randomForest"]
   },
   "performance": {
-    "predictionCount": 150,
-    "performanceMetrics": {
-      "lstm": { "accuracy": 0.72 },
-      "randomForest": { "accuracy": 0.68 },
-      "svm": { "accuracy": 0.65 }
-    },
-    "overallPerformance": 0.68
+    "predictionCount": 2,
+    "performanceMetrics": {},
+    "overallPerformance": 0.5
   },
   "features": {
     "featureColumns": 245,
@@ -823,4 +880,67 @@ Open CFD long on BTC at $60,000 with x10 leverage
 BTC goes to $61,000 → you earn 10× the 1.6% gain
 
 But you don’t own BTC, you’re just gaining/losing based on the price move
+
+## 🧪 Testing
+
+### Run All Tests
+```bash
+npm test
+```
+
+### Test Specific Components
+```bash
+# Test chat functionality
+npm run test:chat
+
+# Test LLM chat
+npm run test:llm
+
+# Test advanced chat with LangGraph
+npm run test:advanced-chat
+
+# Test CFD trading with risk ratios and pip calculations
+npm run test:cfd
+```
+
+### CFD Trading Test Examples
+
+The CFD trading tests cover various scenarios:
+
+```javascript
+// Small account test (1:3 ratio)
+{
+    symbol: 'X:BTCUSD',
+    accountBalance: 100,
+    lotSize: 0.01,
+    riskPercentage: 2,
+    riskRatio: '1:3'
+}
+
+// Medium account test (1:5 ratio)
+{
+    symbol: 'X:ETHUSD',
+    accountBalance: 500,
+    lotSize: 0.05,
+    riskPercentage: 3,
+    riskRatio: '1:5'
+}
+
+// Large account test (1:7 ratio)
+{
+    symbol: 'X:BTCUSD',
+    accountBalance: 2000,
+    lotSize: 0.1,
+    riskPercentage: 1.5,
+    riskRatio: '1:7'
+}
+```
+
+### Test Different Lot Sizes
+The system supports various lot sizes:
+- **0.01 lot** = 1,000 units
+- **0.05 lot** = 5,000 units  
+- **0.1 lot** = 10,000 units
+- **0.5 lot** = 50,000 units
+- **1.0 lot** = 100,000 units
 

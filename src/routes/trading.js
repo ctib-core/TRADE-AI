@@ -10,9 +10,10 @@ const router = express.Router();
 const tradingSignalSchema = Joi.object({
     symbol: Joi.string().required().pattern(/^X:[A-Z]+USD$/),
     accountBalance: Joi.number().positive().required(),
+    lotSize: Joi.number().positive().required(), // Lot size in standard lots (0.01 = 1000 units)
     riskPercentage: Joi.number().min(0.1).max(10).default(2),
+    riskRatio: Joi.string().valid('1:3', '1:5', '1:7').default('1:3'), // Risk:Reward ratio
     maxLeverage: Joi.number().min(1).max(100).default(10),
-    takeProfitRatio: Joi.number().min(1).max(5).default(1.5),
     useAdvancedModel: Joi.boolean().default(true),
     enableSelfLearning: Joi.boolean().default(true)
 });
@@ -49,11 +50,13 @@ const predictionEngines = new Map();
  */
 router.post('/signal', validateRequest(tradingSignalSchema), async (req, res) => {
     try {
-        const { symbol, accountBalance, riskPercentage, maxLeverage, takeProfitRatio, useAdvancedModel, enableSelfLearning } = req.body;
+        const { symbol, accountBalance, lotSize, riskPercentage, riskRatio, maxLeverage, useAdvancedModel, enableSelfLearning } = req.body;
         
         logger.trading(`Generating trading signal for ${symbol}`, { 
             accountBalance, 
+            lotSize,
             riskPercentage, 
+            riskRatio,
             useAdvancedModel, 
             enableSelfLearning 
         });
@@ -65,32 +68,54 @@ router.post('/signal', validateRequest(tradingSignalSchema), async (req, res) =>
                 symbol, 
                 riskPercentage, 
                 maxLeverage, 
-                takeProfitRatio,
                 useAdvancedModel,
                 enableSelfLearning,
                 modelType: 'ensemble'
             });
             predictionEngines.set(symbol, engine);
-            
-            // Train if not already trained
-            if (!engine.isTrained) {
+        }
+
+        // Try to load existing model first
+        if (!engine.isTrained) {
+            try {
+                await engine.loadModels(); // Try to load existing model
+                logger.trading(`Model loaded from disk for ${symbol}`);
+            } catch (e) {
+                logger.trading(`Could not load model for ${symbol}, training from scratch: ${e.message}`);
+                // If loading fails, train from scratch
                 engine.initializeModels();
                 await engine.trainModels();
+                await engine.saveModels();
+                engine.lastTraining = new Date().toISOString();
             }
         }
 
         // Run prediction and get trading signal
         const result = await engine.runPrediction();
-        const tradingSignal = result.tradingSignal;
+        
+        // Generate trading signal with proper CFD parameters
+        const tradingSignal = generateCFDTradingSignal({
+            currentPrice: result.currentPrice,
+            predictedPrice: result.prediction.ensemble,
+            confidence: result.prediction.confidence,
+            symbol,
+            lotSize,
+            riskPercentage,
+            riskRatio,
+            accountBalance,
+            maxLeverage
+        });
         
         // Calculate position sizing with proper leverage
         const calculatedLeverage = Math.min(maxLeverage, Math.floor((result.prediction.confidence || 0.5) * 10));
-        const positionSize = calculatePositionSize({
+        const positionSize = calculateCFDPositionSize({
             entryPrice: tradingSignal.entry,
             stopLoss: tradingSignal.stopLoss,
             accountBalance,
             riskPercentage,
-            leverage: calculatedLeverage
+            leverage: calculatedLeverage,
+            lotSize,
+            symbol
         });
 
         const response = {
@@ -101,8 +126,8 @@ router.post('/signal', validateRequest(tradingSignalSchema), async (req, res) =>
                 ...tradingSignal,
                 leverage: calculatedLeverage,
                 positionSize,
-                potentialProfit: calculatePotentialProfit(tradingSignal, positionSize),
-                potentialLoss: calculatePotentialLoss(tradingSignal, positionSize),
+                potentialProfit: calculateCFDProfit(tradingSignal, positionSize, symbol),
+                potentialLoss: calculateCFDLoss(tradingSignal, positionSize, symbol),
                 marginRequired: positionSize.marginRequired,
                 freeMargin: accountBalance - positionSize.marginRequired
             },
@@ -160,12 +185,26 @@ router.post('/train-advanced', validateRequest(advancedTrainingSchema), async (r
             Object.assign(engine.config, config);
         }
 
-        // Initialize and train models
-        engine.initializeModels();
-        await engine.trainModels();
-        
-        // Save models
-        await engine.saveModels();
+        // Try to load existing model first
+        if (!engine.isTrained) {
+            try {
+                await engine.loadModels(); // Try to load existing model
+                logger.trading(`Model loaded from disk for ${symbol}`);
+            } catch (e) {
+                logger.trading(`Could not load model for ${symbol}, training from scratch: ${e.message}`);
+                // If loading fails, train from scratch
+                engine.initializeModels();
+                await engine.trainModels();
+                await engine.saveModels();
+                engine.lastTraining = new Date().toISOString();
+            }
+        } else {
+            // Force retraining for advanced training endpoint
+            engine.initializeModels();
+            await engine.trainModels();
+            await engine.saveModels();
+            engine.lastTraining = new Date().toISOString();
+        }
         
         logger.trading(`Advanced training completed for ${symbol}`);
         
@@ -341,9 +380,18 @@ router.post('/backtest', async (req, res) => {
             enableSelfLearning: false // Disable for backtesting
         });
         
-        // Initialize and train models
-        engine.initializeModels();
-        await engine.trainModels();
+        // Try to load existing model first
+        try {
+            await engine.loadModels(); // Try to load existing model
+            logger.trading(`Model loaded from disk for backtesting ${symbol}`);
+        } catch (e) {
+            logger.trading(`Could not load model for backtesting ${symbol}, training from scratch: ${e.message}`);
+            // If loading fails, train from scratch
+            engine.initializeModels();
+            await engine.trainModels();
+            await engine.saveModels();
+            engine.lastTraining = new Date().toISOString();
+        }
         
         // Mock backtest results (in production, you'd implement actual backtesting)
         const backtestResults = {
@@ -457,6 +505,173 @@ function calculatePotentialLoss(tradingSignal, positionSize) {
     } else {
         return (tradingSignal.stopLoss - tradingSignal.entry) * positionSize.units;
     }
+}
+
+/**
+ * Generate CFD trading signal with proper risk ratios and pip calculations
+ */
+function generateCFDTradingSignal({ currentPrice, predictedPrice, confidence, symbol, lotSize, riskPercentage, riskRatio, accountBalance, maxLeverage }) {
+    try {
+        const priceChangePercent = ((predictedPrice - currentPrice) / currentPrice) * 100;
+        const minConfidence = 0.65;
+        const minPriceChange = 1.5;
+
+        if (confidence < minConfidence || Math.abs(priceChangePercent) < minPriceChange) {
+            return {
+                signal: 'HOLD',
+                confidence: confidence,
+                reason: 'Insufficient confidence or price movement',
+                analysis: {
+                    confidenceThreshold: minConfidence,
+                    priceChangeThreshold: minPriceChange,
+                    currentConfidence: confidence,
+                    currentPriceChange: priceChangePercent
+                }
+            };
+        }
+
+        const signal = priceChangePercent > 0 ? 'BUY' : 'SELL';
+        
+        // Parse risk ratio (e.g., "1:3" -> {risk: 1, reward: 3})
+        const [riskPart, rewardPart] = riskRatio.split(':').map(Number);
+        const riskRewardRatio = rewardPart / riskPart;
+        
+        // Calculate stop loss distance in pips
+        const stopLossPips = calculateStopLossPips(symbol, riskPercentage, currentPrice);
+        
+        // Calculate take profit distance based on risk ratio
+        const takeProfitPips = stopLossPips * riskRewardRatio;
+        
+        let stopLoss, takeProfit;
+        
+        if (signal === 'BUY') {
+            stopLoss = currentPrice - (stopLossPips * getPipValue(symbol));
+            takeProfit = currentPrice + (takeProfitPips * getPipValue(symbol));
+        } else {
+            stopLoss = currentPrice + (stopLossPips * getPipValue(symbol));
+            takeProfit = currentPrice - (takeProfitPips * getPipValue(symbol));
+        }
+
+        return {
+            signal: signal,
+            entry: currentPrice,
+            predictedPrice: predictedPrice,
+            stopLoss: stopLoss,
+            takeProfit: takeProfit,
+            priceChangePercent: priceChangePercent,
+            confidence: confidence,
+            riskRewardRatio: riskRewardRatio,
+            leverage: Math.min(maxLeverage, Math.floor(confidence * 10)),
+            pips: {
+                stopLoss: stopLossPips,
+                takeProfit: takeProfitPips,
+                riskReward: riskRewardRatio
+            },
+            analysis: {
+                signalStrength: Math.abs(priceChangePercent) / minPriceChange,
+                confidenceScore: confidence,
+                riskAssessment: assessRisk(confidence, priceChangePercent)
+            }
+        };
+    } catch (error) {
+        throw new Error(`CFD trading signal generation failed: ${error.message}`);
+    }
+}
+
+/**
+ * Calculate stop loss distance in pips based on risk percentage
+ */
+function calculateStopLossPips(symbol, riskPercentage, currentPrice) {
+    // For crypto, 1 pip = $0.01 for most pairs
+    // Risk percentage determines how many pips we can risk
+    const pipValue = getPipValue(symbol);
+    const riskAmount = (riskPercentage / 100) * currentPrice;
+    return Math.round(riskAmount / pipValue);
+}
+
+/**
+ * Get pip value for different symbols
+ */
+function getPipValue(symbol) {
+    switch (symbol) {
+        case 'X:BTCUSD':
+            return 0.01; // $0.01 per pip
+        case 'X:ETHUSD':
+            return 0.01; // $0.01 per pip
+        default:
+            return 0.01; // Default for other crypto pairs
+    }
+}
+
+/**
+ * Calculate CFD position size with proper lot size handling
+ */
+function calculateCFDPositionSize({ entryPrice, stopLoss, accountBalance, riskPercentage, leverage, lotSize, symbol }) {
+    const riskAmount = accountBalance * (riskPercentage / 100);
+    const priceDifference = Math.abs(entryPrice - stopLoss);
+    const pipValue = getPipValue(symbol);
+    const pipsRisked = priceDifference / pipValue;
+    
+    // Convert lot size to units (1 standard lot = 100,000 units)
+    const units = lotSize * 100000;
+    
+    // Calculate margin required
+    const marginRequired = (units * entryPrice) / leverage;
+    
+    // Calculate risk per pip
+    const riskPerPip = (units * pipValue);
+    
+    return {
+        units: units,
+        marginRequired: marginRequired,
+        leverage: leverage,
+        riskAmount: riskAmount,
+        priceDifference: priceDifference,
+        pipsRisked: pipsRisked,
+        riskPerPip: riskPerPip,
+        lotSize: lotSize
+    };
+}
+
+/**
+ * Calculate potential profit in CFD trading
+ */
+function calculateCFDProfit(tradingSignal, positionSize, symbol) {
+    const pipValue = getPipValue(symbol);
+    const takeProfitPips = tradingSignal.pips.takeProfit;
+    const profitPerPip = positionSize.units * pipValue;
+    return takeProfitPips * profitPerPip;
+}
+
+/**
+ * Calculate potential loss in CFD trading
+ */
+function calculateCFDLoss(tradingSignal, positionSize, symbol) {
+    const pipValue = getPipValue(symbol);
+    const stopLossPips = tradingSignal.pips.stopLoss;
+    const lossPerPip = positionSize.units * pipValue;
+    return stopLossPips * lossPerPip;
+}
+
+/**
+ * Assess risk level based on confidence and price change
+ */
+function assessRisk(confidence, priceChangePercent) {
+    const riskScore = (1 - confidence) + (Math.abs(priceChangePercent) / 10);
+    
+    if (riskScore < 0.3) return 'LOW';
+    if (riskScore < 0.6) return 'MEDIUM';
+    return 'HIGH';
+}
+
+/**
+ * Determine optimal risk ratio based on account balance
+ */
+function getOptimalRiskRatio(accountBalance) {
+    if (accountBalance < 100) return '1:3';
+    if (accountBalance < 500) return '1:5';
+    if (accountBalance < 2000) return '1:7';
+    return '1:5'; // Default for larger accounts
 }
 
 export default router; 

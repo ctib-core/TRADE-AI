@@ -15,6 +15,7 @@ import { setupWebSocket } from './websocket/index.js';
 import { logger } from './utils/logger.js';
 import { connectDatabase } from './config/database.js';
 import { connectRedis } from './config/redis.js';
+import marketDataBuffer from './libs/marketDataBuffer.js';
 
 // Load environment variables
 dotenv.config();
@@ -81,6 +82,20 @@ app.use('*', (req, res) => {
         message: `Route ${req.originalUrl} not found`
     });
 });
+
+// Start market data polling for symbols (delayed to prevent startup conflicts)
+setTimeout(() => {
+    const symbolsToPoll = ['X:BTCUSD', 'X:ETHUSD'];
+    marketDataBuffer.startPolling(symbolsToPoll);
+    global._marketDataPollInterval = setInterval(() => {
+        for (const symbol of symbolsToPoll) {
+            const latest = marketDataBuffer.getLatestWindow(symbol, 1)[0];
+            if (latest && global.broadcastMarketData) {
+                global.broadcastMarketData(symbol, latest);
+            }
+        }
+    }, 2 * 60 * 1000); // 2 minutes
+}, 5000);
 
 // Start server
 async function startServer() {
